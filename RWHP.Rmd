@@ -1,0 +1,167 @@
+---
+title: "WHP Exploration"
+author: "Iris Foxfoot"
+date: "4/14/2021"
+output: html_document
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+# Load the libraries into this R session
+library(raster)  #Main raster library with nearly all functions used in this analysis
+library(rgdal) #Spatial library - most functions used from rgdal are for vectors (shapefiles)
+library(rasterVis)  #Useful for raster visualizations
+#library(maps)   #Has a database of maps. I use this to add a map to my raster to visualize land boundaries
+library(rgeos) #Need this library for topology operations on geometries
+library(dplyr)  #NOT spatial - this is a data wrangling library (is also part of tidyverse)
+#library(RColorBrewer) #Also not spatial - used to set the spectral color scheme 
+library(here) #sets up file path
+library(sf) #also allows R to work with spatial data but as dataframes
+library(sp) #allows R to work with spatial data
+library(tidyverse) #for data wrangling
+library(tmap) #makes interactive maps
+library(kableExtra) #for tables
+library(viridis) #for colors
+```
+
+## Packages Used
+
+library(raster)  #Main raster library with nearly all functions used in this analysis
+
+library(rgdal) #Spatial library - most functions used from rgdal are for vectors (shapefiles)
+
+library(rasterVis)  #Useful for raster visualizations
+
+library(rgeos) #Need this library for topology operations on geometries
+
+library(dplyr)  #NOT spatial - this is a data wrangling
+library (is also part of tidyverse)
+
+library(here) #sets up file path
+
+library(sf) #also allows R to work with spatial data but as dataframes
+
+library(sp) #allows R to work with spatial data
+
+library(tidyverse) #for data wrangling
+
+library(tmap) #makes interactive maps
+
+library(kableExtra) #for tables
+
+library(viridis) #for color
+
+## Data Used
+https://www.atsdr.cdc.gov/placeandhealth/svi/documentation/SVI_documentation_2018.html
+-CDC vulnerability index for 2018
+
+https://www.firelab.org/sites/default/files/images/downloads/wfp_2012_classified_metadata_faq.pdf
+-USFS fire hazard potential
+
+## Set up margins
+```{r}
+#setting smaller margins for plotting
+par(mar=c(2,2,1,1))
+```
+
+## Reading in data
+```{r}
+#read in wildfire hazard potential raster layers
+
+#this one has classes. 1 = low risk, 5 = highest risk, 6&7 represent water/non burnable areas
+wph_cls <- raster(here("WPH_data","whp2020_cls_conus.tif"))
+
+#this one is continuous, higher values = higher fuel load (As I understand...)
+wph_cont <- raster(here("WPH_data", "whp2020_cnt_conus.tif"))
+
+#check it out
+wph_cont
+
+wph_cls
+
+# fixing classes
+wph_cls <- reclassify(wph_cls, rcl=c(5,7,0))
+
+#View it
+plot(wph_cont, main = "Continuous Wildfire Potential")
+
+plot(wph_cls, main = "Classes of Wildfire Potential (5 = high)")
+```
+
+```{r}
+#read in ventura data (taken from CDC vulnerability index of CA at census level)
+vuln_ca_tract <- st_read(here("California", "SVI2018_CALIFORNIA_tract.shp"))
+```
+
+## Data Wrangling
+```{r}
+#filter for Ventura census tracts
+ventura_vuln_tract <- vuln_ca_tract %>% 
+  filter(COUNTY == "Ventura")
+```
+
+```{r}
+#This is like the zonal statistics tool in GIS. I'm overlaying the census boundaries onto the raster of continuous fire risk and calculating the mean risk in each tract. It then appends it to the polygon layer, which is the census tracts of Ventura in this case.
+extract_fire <- raster::extract(wph_cont, ventura_vuln_tract, method="simple", fun=mean, weights=TRUE, normalizeWeights=TRUE, sp = TRUE)
+#NOTE I can't seem to get a function other than mean to work, it could have different results to calculate median risk per census tract...or some other statistic?
+
+#Would be interesting to look at the wildfire hazard potential classes.
+```
+
+```{r}
+#convert to sf (sf makes a polygon layer like a dataframe so you can use tidyverse commands on it)
+extract_fire_sf <- st_as_sf(extract_fire)
+
+#wrangle to show vulnerable communities
+vulnerable_fire <- extract_fire_sf %>% 
+  filter(quantile(RPL_THEMES, 0.75)<RPL_THEMES) %>% #top quantile of vulnerability
+  filter(quantile(whp2020_cnt_conus, 0.75)<whp2020_cnt_conus) #top quantile of fire risk
+
+#change column names, split census name up so it's not so long
+vulnerable_fire <- vulnerable_fire %>% 
+  rename(fire_risk_per_tract = whp2020_cnt_conus) %>% 
+  rename(vulnerability_per_tract = RPL_THEMES) %>% 
+  separate(LOCATION, c("census_tract", "county"), ",")
+```
+
+## Making a Table
+```{r}
+#select variables for a table
+vulnerable_fire_table <- vulnerable_fire %>% 
+  select("census_tract", "fire_risk_per_tract", "vulnerability_per_tract") 
+
+#get rid of geometry info (it automatically "sticks" to the data unless you tell it not to)
+st_geometry(vulnerable_fire_table) <- NULL
+
+#table
+vulnerable_fire_table %>% 
+  kbl(caption = "Top Quartile of Social Vulnerabilty and Fire Potential by Census Tract") %>% 
+   kable_classic(full_width = T, html_font = "Cambria")
+```
+
+## Making a map
+```{r}
+#tmap -- interactive
+tmap_mode("view")
+tm_basemap("OpenStreetMap.HOT") +
+tm_shape(vulnerable_fire) +
+tm_polygons(c("fire_risk_per_tract", "vulnerability_per_tract"), alpha = 0.5, id = "census_tract", palette = "seq", legend.reverse = T) +
+    tm_facets(sync = TRUE, ncol = 2)+
+  tm_layout(aes.palette = list(seq = "-viridis"))
+```
+
+
+## Next steps
+- The CDC has a bunch of variables it uses to calculate vulnerability (see metadata linked). What are major drivers of vulnerability in these census tracts?
+
+- Other ways to look at fire risk. Calculating median risk level per tract? Using the classes instead of the continuous raster? People who live on the edge of a tract are at risk from a fire outside of their tract, would it be better to calculate fire risk within a buffer zone around the tract? How large of a buffer?
+
+- Should we include other "environmental" variables like # of roads for evac, number of fire stations, etc?
+
+
+
+
