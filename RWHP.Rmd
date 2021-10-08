@@ -26,6 +26,8 @@ library(tidyverse) #for data wrangling
 library(tmap) #makes interactive maps
 library(kableExtra) #for tables
 library(viridis) #for colors
+library(ggfortify) #for PCA analysis
+library(janitor) # for cleaning
 ```
 
 ## Packages Used
@@ -116,22 +118,30 @@ extract_fire <- raster::extract(wph_cont, ventura_vuln_tract, method="simple", f
 #convert to sf (sf makes a polygon layer like a dataframe so you can use tidyverse commands on it)
 extract_fire_sf <- st_as_sf(extract_fire)
 
-#wrangle to show vulnerable communities
-vulnerable_fire <- extract_fire_sf %>% 
-  filter(quantile(RPL_THEMES, 0.75)<RPL_THEMES) %>% #top quantile of vulnerability
-  filter(quantile(whp2020_cnt_conus, 0.75)<whp2020_cnt_conus) #top quantile of fire risk
-
 #change column names, split census name up so it's not so long
-vulnerable_fire <- vulnerable_fire %>% 
+vulnerable_fire <- extract_fire_sf %>% 
   rename(fire_risk_per_tract = whp2020_cnt_conus) %>% 
   rename(vulnerability_per_tract = RPL_THEMES) %>% 
   separate(LOCATION, c("census_tract", "county"), ",")
+
+ggplot(data = vulnerable_fire) + 
+  geom_point(aes(y = fire_risk_per_tract, x = RPL_THEME4)) +
+  xlim(0,1)
+  
+```
+
+
+```{r}
+#wrangle to show vulnerable communities
+vulnerable_fire_top_20 <- vulnerable_fire %>% 
+  filter(quantile(vulnerability_per_tract, 0.75)<vulnerability_per_tract) %>% #top quantile of vulnerability
+  filter(quantile(fire_risk_per_tract, 0.75)<fire_risk_per_tract) #top quantile of fire risk
 ```
 
 ## Making a Table
 ```{r}
 #select variables for a table
-vulnerable_fire_table <- vulnerable_fire %>% 
+vulnerable_fire_table <- vulnerable_fire_top_20 %>% 
   select("census_tract", "fire_risk_per_tract", "vulnerability_per_tract") 
 
 #get rid of geometry info (it automatically "sticks" to the data unless you tell it not to)
@@ -148,12 +158,11 @@ vulnerable_fire_table %>%
 #tmap -- interactive
 tmap_mode("view")
 tm_basemap("OpenStreetMap.HOT") +
-tm_shape(vulnerable_fire) +
+tm_shape(vulnerable_fire_top_20) +
 tm_polygons(c("fire_risk_per_tract", "vulnerability_per_tract"), alpha = 0.5, id = "census_tract", palette = "seq", legend.reverse = T) +
     tm_facets(sync = TRUE, ncol = 2)+
   tm_layout(aes.palette = list(seq = "-viridis"))
 ```
-
 
 ## Next steps
 - The CDC has a bunch of variables it uses to calculate vulnerability (see metadata linked). What are major drivers of vulnerability in these census tracts?
@@ -161,7 +170,3 @@ tm_polygons(c("fire_risk_per_tract", "vulnerability_per_tract"), alpha = 0.5, id
 - Other ways to look at fire risk. Calculating median risk level per tract? Using the classes instead of the continuous raster? People who live on the edge of a tract are at risk from a fire outside of their tract, would it be better to calculate fire risk within a buffer zone around the tract? How large of a buffer?
 
 - Should we include other "environmental" variables like # of roads for evac, number of fire stations, etc?
-
-
-
-
